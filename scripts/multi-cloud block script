@@ -1,1 +1,73 @@
 
+manohar@gcp-logserver:/opt/splunk/bin/scripts$ cat multicloud_block_status.sh
+#!/bin/bash
+# multicloud_block_status.sh <ip>
+set -euo pipefail
+
+IP="$1"
+
+# Load config
+if [[ -r /etc/auto-block.conf ]]; then
+  set -a
+  . /etc/auto-block.conf
+  set +a
+fi
+
+AWS_BIN="/usr/local/bin/aws"
+AZ_BIN="az"
+GCLOUD_BIN="gcloud"
+
+################################
+# AWS
+################################
+if [[ -n "${AWS_REGION:-}" && -n "${AWS_PL_ID:-}" ]]; then
+  if aws ec2 get-managed-prefix-list-entries \
+     --region "$AWS_REGION" \
+     --prefix-list-id "$AWS_PL_ID" \
+     --query "Entries[?Cidr=='$IP/32']" --output text 2>/dev/null | grep -q "$IP"; then
+     echo "AWS:   $IP/32 BLOCKED (pl=$AWS_PL_ID)"
+  else
+     echo "AWS:   $IP/32 NOT BLOCKED (pl=$AWS_PL_ID)"
+  fi
+fi
+
+################################
+# Azure - check per-IP rule and scalable rule
+################################
+if [[ -n "${AZURE_RG:-}" && -n "${AZURE_NSG:-}" ]]; then
+  # check per-IP rule name
+  PER_RULE="AUTO_DENY_${IP//./_}"
+  if az network nsg rule show --resource-group "$AZURE_RG" \
+     --nsg-name "$AZURE_NSG" --name "$PER_RULE" &>/dev/null; then
+     PRIO=$(az network nsg rule show --resource-group "$AZURE_RG" \
+        --nsg-name "$AZURE_NSG" --name "$PER_RULE" \
+        --query "priority" -o tsv 2>/dev/null)
+     echo "Azure: $IP/32 BLOCKED (rule=$PER_RULE priority=$PRIO)"
+  else
+     # check scalable rule list
+     SCALED="AutoBlockedIPs-Honeypot"
+     SRC=$(az network nsg rule show --resource-group "$AZURE_RG" \
+        --nsg-name "$AZURE_NSG" --name "$SCALED" --query "sourceAddressPrefixes" -o tsv 2>/dev/null || true)
+     if [[ -n "$SRC" && " $SRC " == *"$IP/32"* ]]; then
+       echo "Azure: $IP/32 BLOCKED (rule=$SCALED)"
+     else
+       echo "Azure: $IP/32 NOT BLOCKED (NSG=$AZURE_NSG)"
+     fi
+  fi
+fi
+
+################################
+# GCP
+################################
+if [[ -n "${GCP_PROJECT_ID:-}" ]]; then
+  RULE="auto-deny-${IP//./-}"
+  SRC=$(gcloud compute firewall-rules describe "$RULE" \
+    --project="$GCP_PROJECT_ID" --format="value(sourceRanges)" 2>/dev/null || true)
+  if [[ -n "$SRC" && "$SRC" == *"$IP/32"* ]]; then
+    PRIO=$(gcloud compute firewall-rules describe "$RULE" \
+      --project="$GCP_PROJECT_ID" --format="value(priority)" 2>/dev/null || true)
+    echo "GCP:   $IP/32 BLOCKED (rule=$RULE priority=${PRIO:-unknown})"
+  else
+    echo "GCP:   $IP/32 NOT BLOCKED (project=$GCP_PROJECT_ID)"
+  fi
+fi
