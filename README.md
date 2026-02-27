@@ -1,8 +1,5 @@
 # MultiCloud-HoneypotNetworkwithAutomatedThreatDetectionandResponse
-MultiCloud-HoneypotNetworkwithAutomatedThreatDetectionandResponse
 
-
-# Multi-Cloud Honeypot Network with Automated Threat Detection and Response
 
 ## Overview
 This project extends deception-based detection by implementing automated threat response
